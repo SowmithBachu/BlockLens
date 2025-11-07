@@ -23,7 +23,6 @@ export default function DashboardPage() {
 const { connection } = useConnection();
 	const [wallets, setWallets] = useState<TrackedWallet[]>([]);
 	const [loading, setLoading] = useState(false);
-	const [syncingWalletId, setSyncingWalletId] = useState<string | null>(null);
 	const [airdropping, setAirdropping] = useState(false);
 	const [connectedName, setConnectedName] = useState<string>("");
 	const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -32,6 +31,9 @@ const { connection } = useConnection();
 	const baseAddress = useMemo(() => publicKey?.toBase58() ?? "", [publicKey]);
 	const [connectedSol, setConnectedSol] = useState<number | null>(null);
 	const [solPriceUsd, setSolPriceUsd] = useState<number | null>(null);
+	const [selectedWalletForTransactions, setSelectedWalletForTransactions] = useState<string | null>(null);
+	const [transactions, setTransactions] = useState<any[]>([]);
+	const [loadingTransactions, setLoadingTransactions] = useState(false);
 
 	function shortenAddress(addr: string) {
 		return addr ? `${addr.slice(0, 4)}…${addr.slice(-4)}` : "";
@@ -42,12 +44,17 @@ const { connection } = useConnection();
 		const totalSol = wallets
 			.filter((w) => w.coin === "Solana")
 			.reduce((sum, w) => sum + (w.balanceSol || 0), 0);
+		
+		// Add connected wallet's SOL balance to USD total if connected
+		const connectedSolUsd = connectedSol && solPriceUsd ? connectedSol * solPriceUsd : 0;
+		const totalUsdWithConnected = totalUsd + connectedSolUsd;
+		
 		return {
 			totalWallets: wallets.length,
-			totalUsd,
-			totalSol,
+			totalUsd: totalUsdWithConnected,
+			totalSol: totalSol + (connectedSol || 0),
 		};
-	}, [wallets]);
+	}, [wallets, connectedSol, solPriceUsd]);
 
 	const filteredWallets = useMemo(() => {
 		const q = searchQuery.trim().toLowerCase();
@@ -163,7 +170,14 @@ useEffect(() => {
 			} catch {}
 		}
 		fetchPrice();
-		return () => { cancelled = true; };
+		// Refresh price every 60 seconds
+		const interval = setInterval(() => {
+			if (!cancelled) fetchPrice();
+		}, 60000);
+		return () => { 
+			cancelled = true;
+			clearInterval(interval);
+		};
 	}, []);
 
 	function handleAddAnother() {
@@ -193,11 +207,18 @@ useEffect(() => {
 
 		setAirdropping(true);
 		try {
+			// Add timeout to prevent long waits
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+			
 			const response = await fetch(`/api/wallets/airdrop`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ address: baseAddress, amount: 2 }),
+				signal: controller.signal,
 			});
+
+			clearTimeout(timeoutId);
 
             // parse response safely (text or json)
             let result: any = null;
@@ -206,72 +227,31 @@ useEffect(() => {
             if (!response.ok || !result?.ok) {
                 const message = typeof result?.error === "string" ? result.error : "Failed to airdrop SOL";
 				// Friendly handling for faucet rate limits
-                if (response.status === 429 || (typeof message === "string" && message.includes("429"))) {
-					alert(`${message}\n\nOpening the devnet faucet so you can top up manually.`);
-					try { window.open(`https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`, "_blank"); } catch {}
+                if (response.status === 429 || result?.code === 429 || (typeof message === "string" && message.includes("429"))) {
+					const faucetUrl = result?.faucetUrl || `https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`;
+					const userMessage = `${message}\n\nThe devnet faucet has strict rate limits. Would you like to open the official faucet to request SOL manually?`;
+					if (confirm(userMessage)) {
+						try { window.open(faucetUrl, "_blank"); } catch {}
+					}
 				} else {
 					alert(message);
 				}
 				return;
 			}
             if (result.ok) {
-				// Auto-sync after airdrop to update the balance
-				setTimeout(() => {
-					handleSync(baseAddress);
-				}, 1000);
-                // Also refresh connected SOL immediately
+                // Refresh connected SOL immediately
                 void refreshConnectedSolLocal();
 			}
-		} catch (error) {
+		} catch (error: any) {
 			console.error("Error airdropping SOL:", error);
-			alert("Failed to airdrop SOL. Make sure you're on devnet.");
+			if (error.name === "AbortError") {
+				alert("Airdrop request timed out. The devnet faucet may be rate-limited. Please try using the official faucet or try again later.");
+				try { window.open(`https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`, "_blank"); } catch {}
+			} else {
+				alert("Failed to airdrop SOL. Make sure you're on devnet.");
+			}
 		} finally {
 			setAirdropping(false);
-		}
-	}
-
-	async function handleSync(address: string) {
-		// Find the wallet being synced
-		const wallet = wallets.find((w) => w.address === address);
-		if (!wallet) return;
-
-		setSyncingWalletId(wallet.id);
-		try {
-			const response = await fetch(`/api/wallets/sync`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ address }),
-			});
-
-			if (!response.ok) {
-				throw new Error("Failed to sync wallet");
-			}
-
-			const result = await response.json();
-            if (result.ok && result.data) {
-				// Update the wallet with synced data
-				setWallets((prev) =>
-					prev.map((w) =>
-						w.id === wallet.id
-							? {
-									...w,
-									balanceSol: result.data.balanceSol,
-									totalUsd: result.data.totalUsd,
-									tokenCount: result.data.tokenCount,
-									nftCount: result.data.nftCount,
-									lastUpdatedMs: result.data.lastUpdatedMs,
-								}
-							: w
-					)
-				);
-                // Refresh connected SOL after sync completes
-                void refreshConnectedSolLocal();
-			}
-		} catch (error) {
-			console.error("Error syncing wallet:", error);
-			// You could show a toast notification here
-		} finally {
-			setSyncingWalletId(null);
 		}
 	}
 
@@ -299,6 +279,53 @@ useEffect(() => {
 
 	function removeWallet(id: string) {
 		setWallets((prev) => prev.filter((w) => w.id !== id));
+	}
+
+	async function fetchTransactions(address: string) {
+		setLoadingTransactions(true);
+		setSelectedWalletForTransactions(address);
+		try {
+			const res = await fetch("/api/wallets/transactions", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ address, limit: 20 }),
+			});
+			if (res.ok) {
+				const data = await res.json();
+				if (data.ok) {
+					setTransactions(data.data);
+				} else {
+					setTransactions([]);
+				}
+			} else {
+				setTransactions([]);
+			}
+		} catch (error) {
+			console.error("Failed to fetch transactions:", error);
+			setTransactions([]);
+		} finally {
+			setLoadingTransactions(false);
+		}
+	}
+
+	function closeTransactions() {
+		setSelectedWalletForTransactions(null);
+		setTransactions([]);
+	}
+
+	function getTransactionExplorerUrl(signature: string, chain?: string) {
+		switch (chain) {
+			case "Solana":
+				return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+			case "Ethereum":
+				return `https://etherscan.io/tx/${signature}`;
+			case "Base":
+				return `https://basescan.org/tx/${signature}`;
+			case "Polygon":
+				return `https://polygonscan.com/tx/${signature}`;
+			default:
+				return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+		}
 	}
 
 // removed refresh-all logic
@@ -364,44 +391,79 @@ useEffect(() => {
 				</div>
 			</section>
 			<section className="rounded-xl border border-neutral-200 bg-white/90 p-6 shadow-lg shadow-neutral-200/40 backdrop-blur-sm dark:border-neutral-800 dark:bg-neutral-900/90 dark:shadow-black/20">
-				<h2 className="mb-2 text-xl font-semibold sm:text-2xl">Connected Wallet</h2>
+				<h2 className="mb-6 text-xl font-semibold sm:text-2xl">Connected Wallet</h2>
 				{connected && baseAddress ? (
-					<div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-						<div className="space-y-3">
-							<div>
-								<p className="mb-2 text-sm font-medium text-neutral-500">Name</p>
+					<div className="space-y-6">
+						{/* Wallet Info Grid */}
+						<div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+							{/* Name Input */}
+							<div className="rounded-lg border border-neutral-200 bg-neutral-50/50 p-4 dark:border-neutral-800 dark:bg-neutral-800/50">
+								<label className="mb-2 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+									Wallet Name
+								</label>
 								<input
 									value={connectedName}
 									onChange={(e) => setConnectedName(e.target.value)}
-									className="w-full sm:w-64 rounded-lg border border-neutral-300 bg-transparent px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-400 dark:border-neutral-700"
-									placeholder="Enter name"
+									className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-neutral-700 dark:bg-neutral-900"
+									placeholder="Enter wallet name"
 								/>
 							</div>
-							<div>
-								<p className="mb-2 text-sm font-medium text-neutral-500">Address</p>
-								<p className="font-mono text-sm break-all sm:text-base" title={baseAddress}>{baseAddress}</p>
+
+							{/* Address Display */}
+							<div className="rounded-lg border border-neutral-200 bg-neutral-50/50 p-4 dark:border-neutral-800 dark:bg-neutral-800/50">
+								<label className="mb-2 block text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+									Wallet Address
+								</label>
+								<div className="flex items-center gap-2">
+									<p className="flex-1 font-mono text-xs break-all text-neutral-900 dark:text-neutral-100" title={baseAddress}>
+										{baseAddress}
+									</p>
+									<button
+										onClick={() => copy(baseAddress)}
+										className="flex-shrink-0 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-900 dark:hover:bg-neutral-800"
+									>
+										Copy
+									</button>
+								</div>
 							</div>
 						</div>
-						<div className="flex flex-col gap-3 sm:flex-row">
-							<button
-								onClick={handleAirdrop}
-								disabled={airdropping}
-								className="h-10 rounded-lg bg-green-600 px-6 py-2 text-sm font-medium text-white shadow-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								{airdropping ? "Airdropping..." : "🪂 Airdrop 2 SOL (Devnet)"}
-							</button>
-							<button
-								onClick={handleAddAnother}
-								className="h-10 rounded-lg bg-neutral-900 px-6 py-2 text-sm font-medium text-white shadow-sm hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
-							>
-								+ Add Another Wallet
-							</button>
+
+						{/* Divider */}
+						<div className="border-t border-neutral-200 dark:border-neutral-800"></div>
+
+						{/* Action Buttons */}
+						<div>
+							<p className="mb-3 text-sm font-medium text-neutral-700 dark:text-neutral-300">Quick Actions</p>
+							<div className="flex flex-wrap gap-3">
+								<button
+									onClick={handleAirdrop}
+									disabled={airdropping}
+									className="h-10 flex-shrink-0 rounded-lg bg-green-600 px-4 sm:px-6 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+								>
+									{airdropping ? "Airdropping..." : "🪂 Airdrop 2 SOL"}
+								</button>
+								<button
+									onClick={() => fetchTransactions(baseAddress)}
+									disabled={loadingTransactions && selectedWalletForTransactions === baseAddress}
+									className="h-10 flex-shrink-0 rounded-lg border border-purple-300 bg-purple-50 px-4 sm:px-6 py-2 text-sm font-medium text-purple-700 shadow-sm transition-colors hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-purple-700 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/40 whitespace-nowrap"
+								>
+									{loadingTransactions && selectedWalletForTransactions === baseAddress ? "Loading..." : "📜 View Transactions"}
+								</button>
+								<button
+									onClick={handleAddAnother}
+									className="h-10 flex-shrink-0 rounded-lg bg-neutral-900 px-4 sm:px-6 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200 whitespace-nowrap"
+								>
+									+ Add to Portfolio
+								</button>
+							</div>
 						</div>
 					</div>
 				) : (
-					<p className="text-sm text-neutral-600 dark:text-neutral-300 sm:text-base">
-						Connect a wallet using the button in the navbar.
-					</p>
+					<div className="py-12 text-center">
+						<p className="text-sm text-neutral-600 dark:text-neutral-300 sm:text-base">
+							Connect a wallet using the button in the navbar to get started.
+						</p>
+					</div>
 				)}
 			</section>
 
@@ -431,7 +493,6 @@ useEffect(() => {
 								<th className="py-3 px-4 font-semibold">Name</th>
 								<th className="py-3 px-4 font-semibold">Coin</th>
 								<th className="py-3 px-4 font-semibold">Address</th>
-								<th className="py-3 px-4 font-semibold">Total Value (USD)</th>
 								<th className="py-3 px-4 font-semibold">Token Count</th>
 								<th className="py-3 px-4 font-semibold">NFT Count</th>
 								<th className="py-3 px-4 font-semibold">Actions</th>
@@ -440,7 +501,7 @@ useEffect(() => {
 						<tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
 							{filteredWallets.length === 0 ? (
 								<tr>
-									<td colSpan={7} className="py-12 text-center text-sm text-neutral-500">
+									<td colSpan={6} className="py-12 text-center text-sm text-neutral-500">
 										<span>No wallets match your filters.</span>
 									</td>
 								</tr>
@@ -460,34 +521,15 @@ useEffect(() => {
                                                 </button>
                                             </div>
                                         </td>
-										<td className="py-3 px-4 font-semibold">${(w.totalUsd ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
 										<td className="py-3 px-4">{w.tokenCount ?? 0}</td>
 										<td className="py-3 px-4">{w.nftCount ?? 0}</td>
 										<td className="py-3 px-4">
-											<div className="flex items-center gap-2 flex-wrap">
-                                                
-												<a
-													href={getExplorerUrl(w.address, w.coin)}
-													target="_blank"
-													rel="noreferrer"
-													className="inline-block rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
-												>
-													Explorer
-												</a>
-												<button
-													onClick={() => handleSync(w.address)}
-													disabled={syncingWalletId === w.id}
-													className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/40"
-												>
-													{syncingWalletId === w.id ? "Syncing..." : "Sync Data"}
-												</button>
-												<button
-													onClick={() => removeWallet(w.id)}
-													className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/40"
-												>
-													Remove
-												</button>
-											</div>
+											<button
+												onClick={() => removeWallet(w.id)}
+												className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100 dark:border-red-700 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/40"
+											>
+												Remove
+											</button>
 										</td>
 									</tr>
 								))
@@ -496,6 +538,110 @@ useEffect(() => {
 					</table>
 				</div>
 			</section>
+
+			{/* Transaction History Section */}
+			{selectedWalletForTransactions && (
+				<section className="rounded-xl border border-neutral-200 bg-white/90 p-6 shadow-lg shadow-neutral-200/40 backdrop-blur-sm dark:border-neutral-800 dark:bg-neutral-900/90 dark:shadow-black/20">
+					<div className="mb-4 flex items-center justify-between">
+						<div>
+							<h2 className="text-xl font-semibold sm:text-2xl">Transaction History</h2>
+							<p className="mt-1 text-sm text-neutral-500">
+								{(() => {
+									const wallet = wallets.find((w) => w.address === selectedWalletForTransactions);
+									return wallet ? `${wallet.name} (${shortenAddress(selectedWalletForTransactions)})` : shortenAddress(selectedWalletForTransactions);
+								})()}
+							</p>
+						</div>
+						<button
+							onClick={closeTransactions}
+							className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+						>
+							Close
+						</button>
+					</div>
+					{loadingTransactions ? (
+						<div className="py-12 text-center">
+							<p className="text-sm text-neutral-500">Loading transactions...</p>
+						</div>
+					) : transactions.length === 0 ? (
+						<div className="py-12 text-center">
+							<p className="text-sm text-neutral-500">No transactions found for this wallet.</p>
+						</div>
+					) : (
+						<div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
+							<table className="min-w-full text-left text-sm">
+								<thead className="sticky top-0 bg-neutral-50/70 backdrop-blur-sm border-b border-neutral-200 text-neutral-600 dark:bg-neutral-900/70 dark:text-neutral-300 dark:border-neutral-800">
+									<tr>
+										<th className="py-3 px-4 font-semibold">Type</th>
+										<th className="py-3 px-4 font-semibold">Amount (SOL)</th>
+										<th className="py-3 px-4 font-semibold">Status</th>
+										<th className="py-3 px-4 font-semibold">Time</th>
+										<th className="py-3 px-4 font-semibold">Signature</th>
+										<th className="py-3 px-4 font-semibold">Actions</th>
+									</tr>
+								</thead>
+								<tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+									{transactions.map((tx) => (
+										<tr key={tx.signature} className="hover:bg-neutral-50/60 dark:hover:bg-neutral-800/40">
+											<td className="py-3 px-4">
+												<span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+													tx.type === "sent" 
+														? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+														: tx.type === "received"
+														? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+														: tx.type === "swap"
+														? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+														: "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+												}`}>
+													{tx.type === "sent" ? "↗ Sent" : tx.type === "received" ? "↙ Received" : tx.type === "swap" ? "⇄ Swap" : "• Other"}
+												</span>
+											</td>
+											<td className="py-3 px-4 font-semibold">
+												{tx.solAmount > 0 ? `${tx.solAmount.toFixed(4)} SOL` : "-"}
+											</td>
+											<td className="py-3 px-4">
+												<span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+													tx.status === "success"
+														? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+														: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+												}`}>
+													{tx.status === "success" ? "✓ Success" : "✗ Failed"}
+												</span>
+											</td>
+											<td className="py-3 px-4 text-xs text-neutral-500">
+												{tx.blockTime ? new Date(tx.blockTime * 1000).toLocaleString() : "Unknown"}
+											</td>
+											<td className="py-3 px-4">
+												<div className="flex items-center gap-2">
+													<span className="font-mono text-xs" title={tx.signature}>
+														{tx.signature.slice(0, 16)}...
+													</span>
+													<button
+														onClick={() => copy(tx.signature)}
+														className="rounded-lg border border-neutral-300 px-2 py-1 text-[10px] font-medium transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+													>
+														Copy
+													</button>
+												</div>
+											</td>
+											<td className="py-3 px-4">
+												<a
+													href={getTransactionExplorerUrl(tx.signature, wallets.find((w) => w.address === selectedWalletForTransactions)?.coin)}
+													target="_blank"
+													rel="noreferrer"
+													className="inline-block rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-neutral-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
+												>
+													View
+												</a>
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</div>
+					)}
+				</section>
+			)}
 
 			<AddWalletDialog
 				open={isDialogOpen}

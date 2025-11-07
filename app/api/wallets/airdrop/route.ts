@@ -23,12 +23,26 @@ export async function POST(request: Request) {
         const tryAmounts = [amount, 1, 0.5, 0.2, 0.1];
         let signature: string | null = null;
         let lastErr: any = null;
+        const maxAttempts = 3; // Limit total attempts to prevent long waits
+        let attemptCount = 0;
+        
         for (const rpcUrl of rpcCandidates) {
+            if (signature) break; // Already succeeded
             const connection = new Connection(rpcUrl, "confirmed");
             for (const amt of tryAmounts) {
+                if (attemptCount >= maxAttempts) break;
+                attemptCount++;
+                
                 try {
                     const lamports = Math.floor(Math.max(0.1, amt) * LAMPORTS_PER_SOL);
-                    signature = await connection.requestAirdrop(publicKey, lamports);
+                    // Add timeout to requestAirdrop
+                    const airdropPromise = connection.requestAirdrop(publicKey, lamports);
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error("Airdrop request timeout")), 5000)
+                    );
+                    
+                    signature = await Promise.race([airdropPromise, timeoutPromise]) as string;
+                    
                     // Confirm using latest blockhash
                     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
                     await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
@@ -38,12 +52,22 @@ export async function POST(request: Request) {
                 } catch (e: any) {
                     lastErr = e;
                     const msg = String(e?.message || e);
-                    // On explicit 429 from faucet, try next RPC immediately
+                    // On explicit 429 from faucet, return early
                     if (msg.includes("429") || msg.toLowerCase().includes("too many requests")) {
-                        break; // break inner loop, move to next RPC
+                        return NextResponse.json(
+                            { 
+                                ok: false, 
+                                error: "Airdrop rate-limited. The devnet faucet has strict limits. Please use the official faucet or try again later.",
+                                code: 429,
+                                faucetUrl: `https://faucet.solana.com/?cluster=devnet&wallet=${address}`
+                            }, 
+                            { status: 429, headers: { "Cache-Control": "no-store" } }
+                        );
                     }
                     // brief backoff before next attempt on same RPC
-                    await new Promise((r) => setTimeout(r, 300));
+                    if (attemptCount < maxAttempts) {
+                        await new Promise((r) => setTimeout(r, 500));
+                    }
                 }
             }
             if (signature) break; // stop if we already succeeded

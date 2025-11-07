@@ -31,6 +31,7 @@ export default function Navbar() {
 					</Link>
 					<ul className="hidden items-center gap-3 text-base sm:flex">
 						<li><Link href="/dashboard" className="rounded-lg px-4 py-2.5 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white">Dashboard</Link></li>
+						<li><Link href="/gasfee" className="rounded-lg px-4 py-2.5 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800 dark:hover:text-white">Gas Fee Calculator</Link></li>
 					</ul>
 				</nav>
 				<div className="flex items-center gap-3">
