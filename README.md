@@ -20,12 +20,6 @@ BlockLens is a Solana-focused portfolio dashboard built with Next.js 16 and the 
   - `POST /api/wallets/airdrop` – devnet airdrop helper with automatic retry and faucet fallback.
   - `POST /api/wallets/sync` – balance, token, and NFT metadata sync for tracked wallets.
 
-## Tech stack
-
-- Next.js 16 (App Router)
-- React 19
-- Solana Wallet Adapter (`@solana/wallet-adapter-react`, `@solana/web3.js`)
-- Tailwind CSS 4 (via `@tailwindcss/postcss`)
 
 ## Getting started
 
@@ -44,36 +38,3 @@ BlockLens is a Solana-focused portfolio dashboard built with Next.js 16 and the 
    - `NEXT_PUBLIC_RPC_URL` – override the default Solana devnet RPC endpoint.
 
 > **Note:** The airdrop helper targets Solana devnet. If the faucet rejects repeated requests (HTTP 429), the app offers to open the official Solana faucet so you can top up manually.
-
-## Available scripts
-
-| Command        | Description                     |
-|----------------|---------------------------------|
-| `npm run dev`  | Start the development server.   |
-| `npm run build`| Create a production build.      |
-| `npm run start`| Launch the production server.   |
-| `npm run lint` | Run ESLint across the project.  |
-
-## Project structure (highlights)
-
-```
-app/
-  page.tsx                # Landing page
-  dashboard/page.tsx      # Main wallet dashboard
-  gasfee/page.tsx         # Gas fee calculator
-  api/
-    fees/route.ts         # Current fee data
-    wallets/
-      airdrop/route.ts    # Devnet airdrop helper
-      transactions/route.ts
-      sync/route.ts
-components/
-  Navbar.tsx
-  AddWalletDialog.tsx
-lib/
-  wallet.tsx              # Wallet context provider
-```
-
-## Deployment
-
-BlockLens is a standard Next.js 16 App Router project and can be deployed to any Node.js-compatible platform. For the quickest setup, use [Vercel](https://vercel.com) and add any required environment variables in the dashboard.
