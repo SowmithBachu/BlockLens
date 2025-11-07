@@ -1,36 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BlockLens
 
-## Getting Started
+BlockLens is a Solana-focused portfolio dashboard built with Next.js 16 and the Solana Wallet Adapter. It lets you monitor devnet balances, organise multiple wallets, request airdrops, and estimate transaction fees without leaving the browser.
 
-First, run the development server:
+## Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Interactive dashboard**
+  - Portfolio summary with live SOL → USD conversion using devnet prices.
+  - Manage tracked wallets locally (search, export CSV, remove, copy addresses).
+  - Connected wallet panel with friendly naming, balance refresh, and devnet airdrop helper that gracefully handles rate limiting.
+- **Gas fee calculator (`/gasfee`)**
+  - Fetches current base and prioritisation fees from the Solana network.
+  - Provides preset estimates for common transaction types (simple transfer, token transfer, DEX swap, NFT transfer, smart contract call).
+  - Custom calculator to estimate total cost for any number of transactions.
+- **Transaction insights**
+  - API endpoint for recent transaction history with signature, amount, type inference, and status.
+- **API surface**
+  - `GET /api/fees` – current network fee data.
+  - `POST /api/wallets/transactions` – recent signatures and transaction classification.
+  - `POST /api/wallets/airdrop` – devnet airdrop helper with automatic retry and faucet fallback.
+  - `POST /api/wallets/sync` – balance, token, and NFT metadata sync for tracked wallets.
+
+## Tech stack
+
+- Next.js 16 (App Router)
+- React 19
+- Solana Wallet Adapter (`@solana/wallet-adapter-react`, `@solana/web3.js`)
+- Tailwind CSS 4 (via `@tailwindcss/postcss`)
+
+## Getting started
+
+1. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+2. **Run the development server**
+   ```bash
+   npm run dev
+   ```
+   The app becomes available at [http://localhost:3000](http://localhost:3000).
+
+3. **Optional configuration**
+   - `NEXT_PUBLIC_RPC_URL` – override the default Solana devnet RPC endpoint.
+
+> **Note:** The airdrop helper targets Solana devnet. If the faucet rejects repeated requests (HTTP 429), the app offers to open the official Solana faucet so you can top up manually.
+
+## Available scripts
+
+| Command        | Description                     |
+|----------------|---------------------------------|
+| `npm run dev`  | Start the development server.   |
+| `npm run build`| Create a production build.      |
+| `npm run start`| Launch the production server.   |
+| `npm run lint` | Run ESLint across the project.  |
+
+## Project structure (highlights)
+
+```
+app/
+  page.tsx                # Landing page
+  dashboard/page.tsx      # Main wallet dashboard
+  gasfee/page.tsx         # Gas fee calculator
+  api/
+    fees/route.ts         # Current fee data
+    wallets/
+      airdrop/route.ts    # Devnet airdrop helper
+      transactions/route.ts
+      sync/route.ts
+components/
+  Navbar.tsx
+  AddWalletDialog.tsx
+lib/
+  wallet.tsx              # Wallet context provider
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Deployment
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+BlockLens is a standard Next.js 16 App Router project and can be deployed to any Node.js-compatible platform. For the quickest setup, use [Vercel](https://vercel.com) and add any required environment variables in the dashboard.
