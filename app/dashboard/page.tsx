@@ -71,13 +71,11 @@ const { connection } = useConnection();
 		async function load() {
 			setLoading(true);
 			try {
-				// Prefer localStorage cache first
-				const cached = typeof window !== "undefined" ? localStorage.getItem("wallets") : null;
+				const cached = localStorage.getItem("wallets");
 				if (cached) {
 					const parsed = JSON.parse(cached) as TrackedWallet[];
 					if (!ignore) setWallets(parsed);
 				} else {
-					// Fallback to API (currently returns empty array)
 					const res = await fetch("/api/wallets", { cache: "no-store" });
 					if (res.ok) {
 						const data = (await res.json()) as TrackedWallet[];
@@ -100,29 +98,22 @@ const { connection } = useConnection();
 
 	// Persist to localStorage when wallets change
 	useEffect(() => {
-		if (typeof window === "undefined") return;
 		localStorage.setItem("wallets", JSON.stringify(wallets));
 	}, [wallets]);
 
 	useEffect(() => {
-		if (typeof window === "undefined") return;
 		const saved = localStorage.getItem("connectedName");
 		if (saved) setConnectedName(saved);
 	}, []);
 
 	useEffect(() => {
-		if (typeof window === "undefined") return;
 		localStorage.setItem("connectedName", connectedName);
 	}, [connectedName]);
 
 // Helper: refresh connected SOL balance
 async function refreshConnectedSolLocal() {
     try {
-        if (!publicKey) {
-            setConnectedSol(null);
-            return;
-        }
-        const lamports = await connection.getBalance(publicKey);
+        const lamports = await connection.getBalance(publicKey!);
         setConnectedSol(lamports / LAMPORTS_PER_SOL);
     } catch {
         setConnectedSol(null);
@@ -168,11 +159,10 @@ useEffect(() => {
 				const price = Number(data?.price);
 				if (!cancelled && Number.isFinite(price)) setSolPriceUsd(price);
 			} catch (error) {
-				console.error("Failed to fetch SOL price:", error);
+				// Silently fail
 			}
 		}
 		fetchPrice();
-		// Refresh price every 60 seconds
 		const interval = setInterval(() => {
 			if (!cancelled) fetchPrice();
 		}, 60000);
@@ -209,9 +199,8 @@ useEffect(() => {
 
 		setAirdropping(true);
 		try {
-			// Add timeout to prevent long waits
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+			const timeoutId = setTimeout(() => controller.abort(), 10000);
 			
 			const response = await fetch(`/api/wallets/airdrop`, {
 				method: "POST",
@@ -222,33 +211,29 @@ useEffect(() => {
 
 			clearTimeout(timeoutId);
 
-            // parse response safely (text or json)
-            let result: any = null;
-            const text = await response.text();
-            try { result = JSON.parse(text); } catch { result = { ok: false, error: text }; }
-            if (!response.ok || !result?.ok) {
-                const message = typeof result?.error === "string" ? result.error : "Failed to airdrop SOL";
-				// Friendly handling for faucet rate limits
-                if (response.status === 429 || result?.code === 429 || (typeof message === "string" && message.includes("429"))) {
+			let result: any = null;
+			const text = await response.text();
+			try { result = JSON.parse(text); } catch { result = { ok: false, error: text }; }
+			
+			if (!response.ok || !result?.ok) {
+				const message = typeof result?.error === "string" ? result.error : "Failed to airdrop SOL";
+				if (response.status === 429 || result?.code === 429 || (typeof message === "string" && message.includes("429"))) {
 					const faucetUrl = result?.faucetUrl || `https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`;
 					const userMessage = `${message}\n\nThe devnet faucet has strict rate limits. Would you like to open the official faucet to request SOL manually?`;
 					if (confirm(userMessage)) {
-						try { window.open(faucetUrl, "_blank"); } catch {}
+						window.open(faucetUrl, "_blank");
 					}
 				} else {
 					alert(message);
 				}
 				return;
 			}
-            if (result.ok) {
-                // Refresh connected SOL immediately
-                void refreshConnectedSolLocal();
-			}
+			
+			void refreshConnectedSolLocal();
 		} catch (error: any) {
-			console.error("Error airdropping SOL:", error);
 			if (error.name === "AbortError") {
 				alert("Airdrop request timed out. The devnet faucet may be rate-limited. Please try using the official faucet or try again later.");
-				try { window.open(`https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`, "_blank"); } catch {}
+				window.open(`https://faucet.solana.com/?cluster=devnet&wallet=${baseAddress}`, "_blank");
 			} else {
 				alert("Failed to airdrop SOL. Make sure you're on devnet.");
 			}
@@ -294,16 +279,11 @@ useEffect(() => {
 			});
 			if (res.ok) {
 				const data = await res.json();
-				if (data.ok) {
-					setTransactions(data.data);
-				} else {
-					setTransactions([]);
-				}
+				setTransactions(data.ok ? data.data : []);
 			} else {
 				setTransactions([]);
 			}
 		} catch (error) {
-			console.error("Failed to fetch transactions:", error);
 			setTransactions([]);
 		} finally {
 			setLoadingTransactions(false);
