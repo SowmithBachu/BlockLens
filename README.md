@@ -34,7 +34,5 @@ BlockLens is a Solana-focused portfolio dashboard built with Next.js 16 and the 
    ```
    The app becomes available at [http://localhost:3000](http://localhost:3000).
 
-3. **Optional configuration**
-   - `NEXT_PUBLIC_RPC_URL` – override the default Solana devnet RPC endpoint.
 
 > **Note:** The airdrop helper targets Solana devnet. If the faucet rejects repeated requests (HTTP 429), the app offers to open the official Solana faucet so you can top up manually.
